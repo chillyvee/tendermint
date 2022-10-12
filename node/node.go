@@ -315,15 +315,31 @@ func createAndStartIndexerService(
 }
 
 func doHandshake(
+	config *cfg.StateSyncConfig,
 	stateStore sm.Store,
 	state sm.State,
 	blockStore sm.BlockStore,
 	genDoc *types.GenesisDoc,
 	eventBus types.BlockEventPublisher,
 	proxyApp proxy.AppConns,
-	consensusLogger log.Logger,
-) error {
-	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
+	consensusLogger log.Logger) error {
+
+	var err error
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stateProvider, err := statesync.NewLightClientStateProvider(
+		ctx,
+		state.ChainID, state.Version, state.InitialHeight,
+		config.RPCServers, light.TrustOptions{
+			Period: config.TrustPeriod,
+			Height: config.TrustHeight,
+			Hash:   config.TrustHashBytes(),
+		}, consensusLogger)
+	if err != nil {
+		return fmt.Errorf("failed to set up light client state provider: %w", err)
+	}
+	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc, stateProvider)
+
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
 	if err := handshaker.Handshake(proxyApp); err != nil {
@@ -773,8 +789,10 @@ func NewNode(config *cfg.Config,
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
-	if !stateSync {
-		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+
+	// RPC recovery is required if blockStore Height is 0
+	if blockStore.Height() == 0 || !stateSync {
+		if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
 			return nil, err
 		}
 
@@ -987,16 +1005,43 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	// Run state sync
-	if n.stateSync {
-		bcR, ok := n.bcReactor.(fastSyncReactor)
-		if !ok {
-			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
-		}
-		err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
-			n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+	// Finish Local stateSync by fetching latest heights from RPC
+	if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
+		// if appState.Height > 0, but if blockStore has just been RPC restored, then we must force swtich to consensus
+		n.Logger.Info("Detected recent RPC blockStore restore.  Bootstrap with local state.")
+
+		state, err := n.stateStore.Load()
 		if err != nil {
-			return fmt.Errorf("failed to start state sync: %w", err)
+			return fmt.Errorf("cannot load state: %w", err)
+		}
+		err = n.stateStore.Bootstrap(state)
+		if err != nil {
+			n.Logger.Error("Failed to bootstrap node with new state", "err", err)
+			return err
+		}
+
+		n.Logger.Info("Fetch remaining heights from network")
+		n.consensusReactor.Metrics.StateSyncing.Set(0)
+		n.consensusReactor.Metrics.FastSyncing.Set(1)
+		bcR, _ := n.bcReactor.(fastSyncReactor)
+		err = bcR.SwitchToFastSync(state)
+		if err != nil {
+			n.Logger.Error("Failed to switch to fast sync", "err", err)
+			return err
+		}
+	} else {
+		// Statesync reqeusting all data from P2P
+		if n.stateSync {
+			// If state and blockStore.Height are both at the same height, skip the P2P Statesync and immediately enter consensus
+			bcR, ok := n.bcReactor.(fastSyncReactor)
+			if !ok {
+				return fmt.Errorf("this blockchain reactor does not support switching from state sync")
+			}
+			err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
+				n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+			if err != nil {
+				return fmt.Errorf("failed to start state sync: %w", err)
+			}
 		}
 	}
 
