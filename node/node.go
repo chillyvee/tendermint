@@ -988,7 +988,7 @@ func (n *Node) OnStart() error {
 	}
 
 	// Run state sync
-	if n.stateSync {
+	if false && n.stateSync {
 		bcR, ok := n.bcReactor.(fastSyncReactor)
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")

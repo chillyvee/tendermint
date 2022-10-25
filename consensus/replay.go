@@ -278,6 +278,51 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 	return nil
 }
 
+// LocalSync restores stateStore and blockStore state which is not included in the snapshot
+// This function assumes that the implicit trusted local snapshot chunks have already been applied
+// State restoration depends on heights after the restored snapshot so the RPC dependency remains
+/*
+func LocalSync() (sm.State, *types.Commit, error) {
+
+	if stateProvider == nil {
+		var err error
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		stateProvider, err = statesync.NewLightClientStateProvider(
+			ctx,
+			state.ChainID, state.Version, state.InitialHeight,
+			config.RPCServers, light.TrustOptions{
+				Period: config.TrustPeriod,
+				Height: config.TrustHeight,
+				Hash:   config.TrustHashBytes(),
+			}, ssR.Logger.With("module", "light"))
+		if err != nil {
+			return fmt.Errorf("failed to set up light client state provider: %w", err)
+		}
+	}
+
+	pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	defer pcancel()
+
+	// Optimistically build new state, so we don't discover any light client failures at the end.
+	state, err := stateProvider.State(pctx, s.restoreHeight)
+	if err != nil {
+		s.logger.Info("failed to fetch and verify tendermint state", "err", err)
+		return err
+	}
+	commit, err := stateProvider.Commit(pctx, s.restoreHeight)
+	if err != nil {
+		s.logger.Info("failed to fetch and verify commit", "err", err)
+		return err
+	}
+
+	// Done! 🎉
+	s.logger.Info("🎉 State Restored", "height", s.restoreHeight)
+
+	return nil
+}
+*/
+
 // ReplayBlocks replays all blocks since appBlockHeight and ensures the result
 // matches the current state.
 // Returns the final AppHash or an error.
@@ -370,9 +415,14 @@ func (h *Handshaker) ReplayBlocks(
 		return appHash, sm.ErrAppBlockHeightTooLow{AppHeight: appBlockHeight, StoreBase: storeBlockBase}
 
 	case storeBlockHeight < appBlockHeight:
-		// the app should never be ahead of the store (but this is under app's control)
-		return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
-
+		// Sync the latest store information from RPC if possible
+		/*
+			if err := LocalSync(); err != nil {
+				// the app should never be ahead of the store (but this is under app's control)
+				return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
+			}
+		*/
+		panic("Die Here.  TODO: Setup stateProvider then call LocalSync()")
 	case storeBlockHeight < stateBlockHeight:
 		// the state should never be ahead of the store (this is under tendermint's control)
 		panic(fmt.Sprintf("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
