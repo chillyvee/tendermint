@@ -316,6 +316,7 @@ func createAndStartIndexerService(
 }
 
 func doHandshake(
+	config *cfg.StateSyncConfig,
 	stateStore sm.Store,
 	state sm.State,
 	blockStore sm.BlockStore,
@@ -324,8 +325,22 @@ func doHandshake(
 	proxyApp proxy.AppConns,
 	consensusLogger log.Logger) error {
 
-	// TODO: create/pass stateProvider
-	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
+	var err error
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stateProvider, err := statesync.NewLightClientStateProvider(
+		ctx,
+		state.ChainID, state.Version, state.InitialHeight,
+		config.RPCServers, light.TrustOptions{
+			Period: config.TrustPeriod,
+			Height: config.TrustHeight,
+			Hash:   config.TrustHashBytes(),
+		}, consensusLogger)
+	if err != nil {
+		return fmt.Errorf("failed to set up light client state provider: %w", err)
+	}
+
+	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc, stateProvider)
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
 	if err := handshaker.Handshake(proxyApp); err != nil {
@@ -956,7 +971,7 @@ func (n *Node) OnStart() error {
 	consensusLogger := n.Logger.With("module", "consensus")
 	if true || !stateSync { // force true during test
 		// TODO: create/pass stateProvider
-		if err := doHandshake(n.stateStore, n.stateSyncGenesis, n.blockStore, n.genesisDoc, n.eventBus, n.proxyApp, consensusLogger); err != nil {
+		if err := doHandshake(n.config.StateSync, n.stateStore, n.stateSyncGenesis, n.blockStore, n.genesisDoc, n.eventBus, n.proxyApp, consensusLogger); err != nil {
 			return err
 		}
 	}

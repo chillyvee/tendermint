@@ -2,6 +2,8 @@ package consensus
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -11,8 +13,10 @@ import (
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto/merkle"
 	"github.com/tendermint/tendermint/libs/log"
+	"github.com/tendermint/tendermint/light"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
+	"github.com/tendermint/tendermint/statesync"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -198,27 +202,29 @@ func makeHeightSearchFunc(height int64) auto.SearchFunc {
 //---------------------------------------------------
 
 type Handshaker struct {
-	stateStore   sm.Store
-	initialState sm.State
-	store        sm.BlockStore
-	eventBus     types.BlockEventPublisher
-	genDoc       *types.GenesisDoc
-	logger       log.Logger
+	stateStore    sm.Store
+	initialState  sm.State
+	store         sm.BlockStore
+	eventBus      types.BlockEventPublisher
+	genDoc        *types.GenesisDoc
+	logger        log.Logger
+	stateProvider statesync.StateProvider
 
 	nBlocks int // number of blocks applied to the state
 }
 
 func NewHandshaker(stateStore sm.Store, state sm.State,
-	store sm.BlockStore, genDoc *types.GenesisDoc) *Handshaker {
+	store sm.BlockStore, genDoc *types.GenesisDoc, stateProvider statesync.StateProvider) *Handshaker {
 
 	return &Handshaker{
-		stateStore:   stateStore,
-		initialState: state,
-		store:        store,
-		eventBus:     types.NopEventBus{},
-		genDoc:       genDoc,
-		logger:       log.NewNopLogger(),
-		nBlocks:      0,
+		stateStore:    stateStore,
+		initialState:  state,
+		store:         store,
+		eventBus:      types.NopEventBus{},
+		genDoc:        genDoc,
+		logger:        log.NewNopLogger(),
+		stateProvider: stateProvider,
+		nBlocks:       0,
 	}
 }
 
@@ -274,6 +280,42 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 		"appHeight", blockHeight, "appHash", appHash)
 
 	// TODO: (on restart) replay mempool
+
+	return nil
+}
+
+// LocalSync restores stateStore and blockStore state which is not included in the snapshot
+// This function assumes that the implicit trusted local snapshot chunks have already been applied
+// State restoration depends on heights after the restored snapshot so the RPC dependency remains
+func (h *Handshaker) localSync(appBlockHeight uint64) error {
+	if h.stateProvider == nil {
+		return errors.New("Missing State Provider")
+	}
+
+	pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	defer pcancel()
+
+	// Optimistically build new state, so we don't discover any light client failures at the end.
+	_, err := h.stateProvider.State(pctx, appBlockHeight)
+	if err != nil {
+		h.logger.Info("failed to fetch and verify tendermint state", "err", err)
+		if err == light.ErrNoWitnesses {
+			return err
+		}
+		return errors.New("snapshot was rejected")
+	}
+
+	_, err = h.stateProvider.Commit(pctx, appBlockHeight)
+	if err != nil {
+		h.logger.Info("failed to fetch and verify commit", "err", err)
+		if err == light.ErrNoWitnesses {
+			return err
+		}
+		return errors.New("snapshot was rejected")
+	}
+
+	// Done! 🎉
+	h.logger.Info("🎉 Local Snapshot Restored", "height", appBlockHeight)
 
 	return nil
 }
@@ -371,8 +413,9 @@ func (h *Handshaker) ReplayBlocks(
 
 	case storeBlockHeight < appBlockHeight:
 		// the app should never be ahead of the store (but this is under app's control)
-		return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
-
+		if err := h.localSync(uint64(appBlockHeight)); err != nil {
+			return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
+		}
 	case storeBlockHeight < stateBlockHeight:
 		// the state should never be ahead of the store (this is under tendermint's control)
 		panic(fmt.Sprintf("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
