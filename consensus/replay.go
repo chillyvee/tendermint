@@ -341,6 +341,20 @@ func (h *Handshaker) ReplayBlocks(
 		"stateHeight",
 		stateBlockHeight)
 
+	fmt.Sprintf("HS: Pre switch")
+	// Check restorable conditions for localsync
+	if storeBlockHeight == 0 && appBlockHeight > 0 {
+		var syncErr error
+		if state, _, syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
+			panic("dead")
+		}
+		h.logger.Info("localSync resulting state.Version.Consensus.Block", "state", state.Version.Consensus.Block)
+
+		// Assume Heights Restored
+		storeBlockHeight = appBlockHeight
+		stateBlockHeight = appBlockHeight
+	}
+
 	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
 	if appBlockHeight == 0 {
 		validators := make([]*types.Validator, len(h.genDoc.Validators))
