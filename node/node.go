@@ -324,6 +324,7 @@ func doHandshake(
 	proxyApp proxy.AppConns,
 	consensusLogger log.Logger) error {
 
+	// TODO: create/pass stateProvider
 	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
@@ -795,7 +796,7 @@ func NewNode(config *cfg.Config,
 	// app may modify the validator set, specifying ourself as the only validator.
 	fastSync := config.FastSyncMode && !onlyValidatorIsUs(state, pubKey)
 
-	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
+	// logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
 	csMetrics, p2pMetrics, memplMetrics, smMetrics := metricsProvider(genDoc.ChainID)
 
@@ -953,20 +954,22 @@ func (n *Node) OnStart() error {
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := n.Logger.With("module", "consensus")
-	if !stateSync {
+	if true || !stateSync { // force true during test
+		// TODO: create/pass stateProvider
 		if err := doHandshake(n.stateStore, n.stateSyncGenesis, n.blockStore, n.genesisDoc, n.eventBus, n.proxyApp, consensusLogger); err != nil {
 			return err
 		}
-
-		// Reload the state. It will have the Version.Consensus.App set by the
-		// Handshake, and may have other modifications as well (ie. depending on
-		// what happened during block replay).
-		//state, err := stateStore.Load()
-		n.stateStore.Load()
-		if err != nil {
-			return fmt.Errorf("cannot load state: %w", err)
-		}
 	}
+
+	// Reload the state. It will have the Version.Consensus.App set by the
+	// Handshake, and may have other modifications as well (ie. depending on
+	// what happened during block replay).
+	state, err := n.stateStore.Load()
+	if err != nil {
+		return fmt.Errorf("cannot load state: %w", err)
+	}
+
+	logNodeStartupInfo(state, pubKey, n.Logger, consensusLogger)
 
 	now := tmtime.Now()
 	genTime := n.genesisDoc.GenesisTime
