@@ -315,6 +315,11 @@ func createAndStartIndexerService(
 	return indexerService, txIndexer, blockIndexer, nil
 }
 
+/*
+	err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
+		n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+	if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+*/
 func doHandshake(
 	config *cfg.StateSyncConfig,
 	stateStore sm.Store,

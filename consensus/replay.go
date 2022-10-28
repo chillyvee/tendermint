@@ -209,12 +209,14 @@ type Handshaker struct {
 	genDoc        *types.GenesisDoc
 	logger        log.Logger
 	stateProvider statesync.StateProvider
+	// blockStore    *store.BlockStore
 
 	nBlocks int // number of blocks applied to the state
 }
 
 func NewHandshaker(stateStore sm.Store, state sm.State,
-	store sm.BlockStore, genDoc *types.GenesisDoc, stateProvider statesync.StateProvider) *Handshaker {
+	store sm.BlockStore, genDoc *types.GenesisDoc,
+	stateProvider statesync.StateProvider /*, blockStore *store.BlockStore*/) *Handshaker {
 
 	return &Handshaker{
 		stateStore:    stateStore,
@@ -224,7 +226,8 @@ func NewHandshaker(stateStore sm.Store, state sm.State,
 		genDoc:        genDoc,
 		logger:        log.NewNopLogger(),
 		stateProvider: stateProvider,
-		nBlocks:       0,
+		//blockStore:    blockStore,
+		nBlocks: 0,
 	}
 }
 
@@ -296,7 +299,7 @@ func (h *Handshaker) localSync(appBlockHeight uint64) error {
 	defer pcancel()
 
 	// Optimistically build new state, so we don't discover any light client failures at the end.
-	_, err := h.stateProvider.State(pctx, appBlockHeight)
+	state, err := h.stateProvider.State(pctx, appBlockHeight)
 	if err != nil {
 		h.logger.Info("failed to fetch and verify tendermint state", "err", err)
 		if err == light.ErrNoWitnesses {
@@ -305,13 +308,21 @@ func (h *Handshaker) localSync(appBlockHeight uint64) error {
 		return errors.New("snapshot was rejected")
 	}
 
-	_, err = h.stateProvider.Commit(pctx, appBlockHeight)
+	commit, err := h.stateProvider.Commit(pctx, appBlockHeight)
 	if err != nil {
 		h.logger.Info("failed to fetch and verify commit", "err", err)
 		if err == light.ErrNoWitnesses {
 			return err
 		}
 		return errors.New("snapshot was rejected")
+	}
+
+	if err := h.stateStore.Save(state); err != nil {
+		return err
+	}
+	if err := h.store.SaveSeenCommit(appBlockHeight, commit); err != nil { // ../tendermint/consensus/replay.go:323:20: h.store.SaveSeenCommit undefined (type "github.com/tendermint/tendermint/state".BlockStore has no field or method SaveSeenCommit)
+
+		return err
 	}
 
 	// Done! 🎉
@@ -353,10 +364,6 @@ func (h *Handshaker) ReplayBlocks(
 		// Assume Heights Restored
 		storeBlockHeight = appBlockHeight
 		stateBlockHeight = appBlockHeight
-
-		if err := h.stateStore.Save(state); err != nil {
-			return nil, err
-		}
 	}
 
 	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
