@@ -1025,7 +1025,11 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	fmt.Printf("Check statesync\n\n")
+	if n.stateSync {
+		fmt.Printf("statesync enabled\n\n")
+	} else {
+		fmt.Printf("statesync DISABLED\n\n")
+	}
 
 	if n.stateSync {
 		// P2P stateSync
@@ -1039,7 +1043,9 @@ func (n *Node) OnStart() error {
 		if err != nil {
 			return fmt.Errorf("failed to start state sync: %w", err)
 		}
-	} else if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
+	}
+
+	if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
 		// Local stateSync
 		// statesync will be disabled if appState.Height > 0, but if blockStore has just been RPC restored, then we must force swtich to consensus
 		fmt.Printf("state.LastBlockHeight %v\n", n.stateSyncGenesis.LastBlockHeight)
