@@ -17,6 +17,7 @@ import (
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/statesync"
+	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -320,8 +321,7 @@ func (h *Handshaker) localSync(appBlockHeight uint64) error {
 	if err := h.stateStore.Save(state); err != nil {
 		return err
 	}
-	if err := h.store.SaveSeenCommit(appBlockHeight, commit); err != nil { // ../tendermint/consensus/replay.go:323:20: h.store.SaveSeenCommit undefined (type "github.com/tendermint/tendermint/state".BlockStore has no field or method SaveSeenCommit)
-
+	if err := h.store.(*store.BlockStore).SaveSeenCommit(int64(appBlockHeight), commit); err != nil {
 		return err
 	}
 
