@@ -1060,9 +1060,10 @@ func (n *Node) OnStart() error {
 
 		bcR, _ := n.bcReactor.(fastSyncReactor)
 		err = bcR.SwitchToFastSync(state)
+		// might already be in fastsync if this is a second start
 		if err != nil {
 			n.Logger.Error("Failed to switch to fast sync", "err", err)
-			return err
+			//return err
 		}
 	}
 

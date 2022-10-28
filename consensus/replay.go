@@ -291,51 +291,53 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 // LocalSync restores stateStore and blockStore state which is not included in the snapshot
 // This function assumes that the implicit trusted local snapshot chunks have already been applied
 // State restoration depends on heights after the restored snapshot so the RPC dependency remains
-func (h *Handshaker) localSync(appBlockHeight uint64) error {
+func (h *Handshaker) localSync(appBlockHeight uint64) (sm.State, *types.Commit, error) {
+	var state sm.State
+	var commit *types.Commit
+	var err error
+
 	if h.stateProvider == nil {
-		return errors.New("Missing State Provider")
+		return sm.State{}, nil, errors.New("Missing State Provider")
 	}
 
 	pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	defer pcancel()
 
 	// Optimistically build new state, so we don't discover any light client failures at the end.
-	state, err := h.stateProvider.State(pctx, appBlockHeight)
+	state, err = h.stateProvider.State(pctx, appBlockHeight)
 	if err != nil {
 		h.logger.Info("failed to fetch and verify tendermint state", "err", err)
 		if err == light.ErrNoWitnesses {
-			return err
+			return sm.State{}, nil, err
 		}
-		return errors.New("snapshot was rejected")
+		return sm.State{}, nil, errors.New("snapshot was rejected")
 	}
 
-	commit, err := h.stateProvider.Commit(pctx, appBlockHeight)
+	commit, err = h.stateProvider.Commit(pctx, appBlockHeight)
 	if err != nil {
 		h.logger.Info("failed to fetch and verify commit", "err", err)
 		if err == light.ErrNoWitnesses {
-			return err
+			return sm.State{}, nil, err
 		}
-		return errors.New("snapshot was rejected")
+		return sm.State{}, nil, errors.New("snapshot was rejected")
 	}
 
 	if err := h.stateStore.Save(state); err != nil {
-		return err
+		return sm.State{}, nil, err
 	}
 	/*
 		if err := h.stateStore.Bootstrap(state); err != nil {
-			return err
+			return  sm.State{}, nil, err
 		}
 	*/
 	if err := h.store.(*store.BlockStore).SaveSeenCommit(int64(appBlockHeight), commit); err != nil {
-		return err
+		return sm.State{}, nil, err
 	}
 
 	// Done! 🎉
 	h.logger.Info("🎉 Automatic RPC state Restored", "height", appBlockHeight)
 
-	//h.conR.SwitchToConsensus(state, true)
-
-	return nil
+	return state, commit, nil
 }
 
 // ReplayBlocks replays all blocks since appBlockHeight and ensures the result
@@ -363,7 +365,7 @@ func (h *Handshaker) ReplayBlocks(
 	// Check restorable conditions for localsync
 	if storeBlockHeight == 0 && appBlockHeight > 0 {
 		var syncErr error
-		if syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
+		if state, _, syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
 			panic("dead")
 		}
 		h.logger.Info("localSync resulting state.Version.Consensus.Block", "state", state.Version.Consensus.Block)
@@ -371,6 +373,7 @@ func (h *Handshaker) ReplayBlocks(
 		// Assume Heights Restored
 		storeBlockHeight = appBlockHeight
 		stateBlockHeight = appBlockHeight
+
 	}
 
 	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
@@ -445,9 +448,12 @@ func (h *Handshaker) ReplayBlocks(
 
 	case storeBlockHeight < appBlockHeight:
 		// the app should never be ahead of the store (but this is under app's control)
-		if err := h.localSync(uint64(appBlockHeight)); err != nil {
-			return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
-		}
+		return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
+		/*
+			if err := h.localSync(uint64(appBlockHeight)); err != nil {
+				return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
+			}
+		*/
 	case storeBlockHeight < stateBlockHeight:
 		// the state should never be ahead of the store (this is under tendermint's control)
 		panic(fmt.Sprintf("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
