@@ -795,7 +795,20 @@ func NewNode(config *cfg.Config,
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
-	if true || !stateSync {
+	// Detect when a RPC recovery is required
+
+	/*
+		fmt.Printf("state.LastBlockHeight %v\n", state.LastBlockHeight)
+		fmt.Printf("blockStore.Height() %v\n", blockStore.Height())
+		bsCommit := blockStore.LoadSeenCommit(state.LastBlockHeight)
+		if bsCommit == nil {
+			fmt.Printf("blockStore commit  %v\n", bsCommit)
+		} else {
+			fmt.Printf("blockStore commit  found %v\n", bsCommit)
+		}
+	*/
+
+	if blockStore.Height() == 0 || !stateSync {
 		if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
 			return nil, err
 		}
@@ -807,8 +820,6 @@ func NewNode(config *cfg.Config,
 		if err != nil {
 			return nil, fmt.Errorf("cannot load state: %w", err)
 		}
-
-		// fmt.Printf("Handshake return  State.validators: %+v\n", state.Validators)
 	}
 
 	// Determine whether we should do fast sync. This must happen after the handshake, since the
@@ -837,6 +848,10 @@ func NewNode(config *cfg.Config,
 		evidencePool,
 		sm.BlockExecutorWithMetrics(smMetrics),
 	)
+
+	fmt.Printf("sanity check\n")
+	fmt.Printf("state.LastBlockHeight %v\n", state.LastBlockHeight)
+	fmt.Printf("store.Height %v\n", blockStore.Height())
 
 	// Make BlockchainReactor. Don't start fast sync if we're doing a state sync first.
 	bcReactor, err := createBlockchainReactor(config, state, blockExec, blockStore, fastSync && !stateSync, logger)
@@ -1010,8 +1025,11 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	// Run state sync
-	if false && n.stateSync {
+	fmt.Printf("Check statesync\n\n")
+
+	if n.stateSync {
+		// P2P stateSync
+		// If state and blockStore.Height are both at the same height, skip the P2P Statesync and immediately enter consensus
 		bcR, ok := n.bcReactor.(fastSyncReactor)
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
@@ -1020,6 +1038,31 @@ func (n *Node) OnStart() error {
 			n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
 		if err != nil {
 			return fmt.Errorf("failed to start state sync: %w", err)
+		}
+	} else if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
+		// Local stateSync
+		// statesync will be disabled if appState.Height > 0, but if blockStore has just been RPC restored, then we must force swtich to consensus
+		fmt.Printf("state.LastBlockHeight %v\n", n.stateSyncGenesis.LastBlockHeight)
+		fmt.Printf("Detected recent RPC blockStore restore\n")
+
+		state, err := n.stateStore.Load()
+		if err != nil {
+			return fmt.Errorf("cannot load state: %w", err)
+		}
+		err = n.stateStore.Bootstrap(state)
+		if err != nil {
+			n.Logger.Error("Failed to bootstrap node with new state", "err", err)
+			return err
+		}
+		//n.consensusReactor.SwitchToConsensus(state, true)
+		n.consensusReactor.Metrics.StateSyncing.Set(0)
+		n.consensusReactor.Metrics.FastSyncing.Set(1)
+
+		bcR, _ := n.bcReactor.(fastSyncReactor)
+		err = bcR.SwitchToFastSync(state)
+		if err != nil {
+			n.Logger.Error("Failed to switch to fast sync", "err", err)
+			return err
 		}
 	}
 

@@ -66,15 +66,12 @@ func NewBlockchainReactor(state sm.State, blockExec *sm.BlockExecutor, store *st
 	fastSync bool) *BlockchainReactor {
 
 	if state.LastBlockHeight != store.Height() {
-		panic(fmt.Sprintf("state (%v) < store (%v) height mismatch", state.LastBlockHeight,
+		fmt.Sprintf("WARN: state (%v) != store (%v) height mismatch\n", state.LastBlockHeight, store.Height())
+	}
+	if state.LastBlockHeight < store.Height() {
+		panic(fmt.Sprintf("Unable to recover via RPC when state (%v) < store (%v) height ", state.LastBlockHeight,
 			store.Height()))
 	}
-	/*
-		if state.LastBlockHeight < store.Height() {
-			panic(fmt.Sprintf("Unable to recover via RPC when state (%v) < store (%v) height ", state.LastBlockHeight,
-				store.Height()))
-		}
-	*/
 
 	requestsCh := make(chan BlockRequest, maxTotalRequesters)
 

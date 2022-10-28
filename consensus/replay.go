@@ -321,12 +321,19 @@ func (h *Handshaker) localSync(appBlockHeight uint64) error {
 	if err := h.stateStore.Save(state); err != nil {
 		return err
 	}
+	/*
+		if err := h.stateStore.Bootstrap(state); err != nil {
+			return err
+		}
+	*/
 	if err := h.store.(*store.BlockStore).SaveSeenCommit(int64(appBlockHeight), commit); err != nil {
 		return err
 	}
 
 	// Done! 🎉
 	h.logger.Info("🎉 Automatic RPC state Restored", "height", appBlockHeight)
+
+	//h.conR.SwitchToConsensus(state, true)
 
 	return nil
 }
