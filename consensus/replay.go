@@ -345,7 +345,7 @@ func (h *Handshaker) ReplayBlocks(
 	// Check restorable conditions for localsync
 	if storeBlockHeight == 0 && appBlockHeight > 0 {
 		var syncErr error
-		if state, _, syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
+		if syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
 			panic("dead")
 		}
 		h.logger.Info("localSync resulting state.Version.Consensus.Block", "state", state.Version.Consensus.Block)
@@ -353,6 +353,10 @@ func (h *Handshaker) ReplayBlocks(
 		// Assume Heights Restored
 		storeBlockHeight = appBlockHeight
 		stateBlockHeight = appBlockHeight
+
+		if err := h.stateStore.Save(state); err != nil {
+			return nil, err
+		}
 	}
 
 	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
