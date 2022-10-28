@@ -315,7 +315,7 @@ func (h *Handshaker) localSync(appBlockHeight uint64) error {
 	}
 
 	// Done! 🎉
-	h.logger.Info("🎉 Local Snapshot Restored", "height", appBlockHeight)
+	h.logger.Info("🎉 Automatic RPC state Restored", "height", appBlockHeight)
 
 	return nil
 }

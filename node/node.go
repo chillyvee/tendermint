@@ -787,31 +787,30 @@ func NewNode(config *cfg.Config,
 		stateSync = false
 	}
 
+	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
+	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
-	/*
-		// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
-		// and replays any blocks as necessary to sync tendermint with the app.
-		consensusLogger := logger.With("module", "consensus")
-		if true || !stateSync {
-			if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
-				return nil, err
-			}
-
-			// Reload the state. It will have the Version.Consensus.App set by the
-			// Handshake, and may have other modifications as well (ie. depending on
-			// what happened during block replay).
-			state, err = stateStore.Load()
-			if err != nil {
-				return nil, fmt.Errorf("cannot load state: %w", err)
-			}
+	if true || !stateSync {
+		if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+			return nil, err
 		}
-	*/
+
+		// Reload the state. It will have the Version.Consensus.App set by the
+		// Handshake, and may have other modifications as well (ie. depending on
+		// what happened during block replay).
+		state, err = stateStore.Load()
+		if err != nil {
+			return nil, fmt.Errorf("cannot load state: %w", err)
+		}
+
+		// fmt.Printf("Handshake return  State.validators: %+v\n", state.Validators)
+	}
 
 	// Determine whether we should do fast sync. This must happen after the handshake, since the
 	// app may modify the validator set, specifying ourself as the only validator.
 	fastSync := config.FastSyncMode && !onlyValidatorIsUs(state, pubKey)
 
-	// logNodeStartupInfo(state, pubKey, logger, consensusLogger)
+	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
 	csMetrics, p2pMetrics, memplMetrics, smMetrics := metricsProvider(genDoc.ChainID)
 
@@ -958,34 +957,6 @@ func NewNode(config *cfg.Config,
 
 // OnStart starts the Node. It implements service.Service.
 func (n *Node) OnStart() error {
-	pubKey, err := n.privValidator.GetPubKey()
-	if err != nil {
-		return fmt.Errorf("can't get pubkey: %w", err)
-	}
-	// Determine whether we should attempt state sync.
-	//	stateSync := n.config.StateSync.Enable && !onlyValidatorIsUs(state, pubKey)
-	stateSync := n.config.StateSync.Enable && !onlyValidatorIsUs(n.stateSyncGenesis, pubKey)
-
-	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
-	// and replays any blocks as necessary to sync tendermint with the app.
-	consensusLogger := n.Logger.With("module", "consensus")
-	if true || !stateSync { // force true during test
-		// TODO: create/pass stateProvider
-		if err := doHandshake(n.config.StateSync, n.stateStore, n.stateSyncGenesis, n.blockStore, n.genesisDoc, n.eventBus, n.proxyApp, consensusLogger); err != nil {
-			return err
-		}
-	}
-
-	// Reload the state. It will have the Version.Consensus.App set by the
-	// Handshake, and may have other modifications as well (ie. depending on
-	// what happened during block replay).
-	state, err := n.stateStore.Load()
-	if err != nil {
-		return fmt.Errorf("cannot load state: %w", err)
-	}
-
-	logNodeStartupInfo(state, pubKey, n.Logger, consensusLogger)
-
 	now := tmtime.Now()
 	genTime := n.genesisDoc.GenesisTime
 	if genTime.After(now) {
@@ -1035,7 +1006,7 @@ func (n *Node) OnStart() error {
 	}
 
 	// Run state sync
-	if n.stateSync {
+	if false && n.stateSync {
 		bcR, ok := n.bcReactor.(fastSyncReactor)
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
