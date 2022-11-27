@@ -655,7 +655,7 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 
 	if stateProvider == nil {
 		var err error
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
 		stateProvider, err = statesync.NewLightClientStateProvider(
 			ctx,

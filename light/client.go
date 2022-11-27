@@ -1119,9 +1119,11 @@ func (c *Client) findNewPrimary(ctx context.Context, height int64, remove bool) 
 	}
 
 	// remove witnesses marked as bad. Removal is done in descending order
+	/*
 	if err := c.removeWitnesses(witnessesToRemove); err != nil {
 		c.logger.Error("failed to remove witnesses", "err", err, "witnessesToRemove", witnessesToRemove)
 	}
+	*/
 
 	return nil, lastError
 }
@@ -1176,9 +1178,11 @@ and remove witness. Otherwise, use the different primary`, e.WitnessIndex), "wit
 	}
 
 	// remove witnesses that have misbehaved
+	/*
 	if err := c.removeWitnesses(witnessesToRemove); err != nil {
 		c.logger.Error("failed to remove witnesses", "err", err, "witnessesToRemove", witnessesToRemove)
 	}
+	*/
 
 	return nil
 }
