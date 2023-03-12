@@ -1005,7 +1005,7 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	// Finish Local stateSync by fetching latest heights from RPC
+	// Finish Local stateSync (when AppHeight > 0 but TM Height = 0) by fetching latest heights from RPC
 	if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
 		// if appState.Height > 0, but if blockStore has just been RPC restored, then we must force swtich to consensus
 		n.Logger.Info("Detected recent RPC blockStore restore.  Bootstrap with local state.")
@@ -1021,6 +1021,8 @@ func (n *Node) OnStart() error {
 		}
 
 		n.Logger.Info("Fetch remaining heights from network")
+
+		// FIXME Very ugly to have these metrics bleed through here.
 		n.consensusReactor.Metrics.StateSyncing.Set(0)
 		n.consensusReactor.Metrics.FastSyncing.Set(1)
 		bcR, _ := n.bcReactor.(fastSyncReactor)
@@ -1029,19 +1031,22 @@ func (n *Node) OnStart() error {
 			n.Logger.Error("Failed to switch to fast sync", "err", err)
 			return err
 		}
-	} else {
-		// Statesync reqeusting all data from P2P
-		if n.stateSync {
-			// If state and blockStore.Height are both at the same height, skip the P2P Statesync and immediately enter consensus
-			bcR, ok := n.bcReactor.(fastSyncReactor)
-			if !ok {
-				return fmt.Errorf("this blockchain reactor does not support switching from state sync")
-			}
-			err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
-				n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
-			if err != nil {
-				return fmt.Errorf("failed to start state sync: %w", err)
-			}
+
+		// statesync no longer necessary
+		n.stateSync = false
+	}
+
+	// Statesync reqeusting all data from P2P
+	if n.stateSync {
+		// If state and blockStore.Height are both at the same height, skip the P2P Statesync and immediately enter consensus
+		bcR, ok := n.bcReactor.(fastSyncReactor)
+		if !ok {
+			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
+		}
+		err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
+			n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+		if err != nil {
+			return fmt.Errorf("failed to start state sync: %w", err)
 		}
 	}
 

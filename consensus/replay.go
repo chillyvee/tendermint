@@ -296,7 +296,7 @@ func (h *Handshaker) localSync(appBlockHeight uint64) (sm.State, *types.Commit, 
 	var err error
 
 	if h.stateProvider == nil {
-		return sm.State{}, nil, errors.New("Missing State Provider")
+		return sm.State{}, nil, errors.New("localSync Failed: Missing RPC Light Client State Provider")
 	}
 
 	pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
@@ -358,6 +358,7 @@ func (h *Handshaker) ReplayBlocks(
 	// Check restorable conditions for localsync
 	if storeBlockHeight == 0 && appBlockHeight > 0 {
 		var syncErr error
+		h.logger.Info("localSync ReplayBlocks detected", "appBlockHeight", appBlockHeight)
 		if state, _, syncErr = h.localSync(uint64(appBlockHeight)); syncErr != nil {
 			panic("Unable to use RPC to update state")
 		}
