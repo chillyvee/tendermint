@@ -104,6 +104,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 	}
 
 	return NewNode(config,
+		uint64(0),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
@@ -665,8 +666,9 @@ func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
 func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reactor,
 	stateProvider statesync.StateProvider, config *cfg.StateSyncConfig, fastSync bool,
 	stateStore sm.Store, blockStore *store.BlockStore, state sm.State,
+	syncHeight uint64,
 ) error {
-	ssR.Logger.Info("Starting state sync")
+	ssR.Logger.Info("Starting state sync", "syncHeight", syncHeight)
 
 	if stateProvider == nil {
 		var err error
@@ -686,10 +688,27 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 	}
 
 	go func() {
-		state, commit, err := ssR.Sync(stateProvider, config.DiscoveryTime)
-		if err != nil {
-			ssR.Logger.Error("State sync failed", "err", err)
-			return
+		var commit *types.Commit
+		var err error
+		if syncHeight == 0 {
+			state, commit, err = ssR.Sync(stateProvider, config.DiscoveryTime)
+			if err != nil {
+				ssR.Logger.Error("State sync failed", "err", err)
+				return
+			}
+		} else {
+			state, err = stateStore.Load()
+			if err != nil {
+				ssR.Logger.Error("cannot load state", "err", err)
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			commit, err = stateProvider.Commit(ctx, syncHeight)
+			if err != nil {
+				ssR.Logger.Info("failed to fetch and verify commit", "err", err)
+				return
+			}
 		}
 		err = stateStore.Bootstrap(state)
 		if err != nil {
@@ -720,6 +739,7 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 
 // NewNode returns a new, ready to go, Tendermint Node.
 func NewNode(config *cfg.Config,
+	ssRestoreHeight uint64,
 	privValidator types.PrivValidator,
 	nodeKey *p2p.NodeKey,
 	clientCreator proxy.ClientCreator,
@@ -782,7 +802,7 @@ func NewNode(config *cfg.Config,
 	// Determine whether we should attempt state sync.
 	stateSync := config.StateSync.Enable && !onlyValidatorIsUs(state, pubKey)
 	if stateSync && state.LastBlockHeight > 0 {
-		logger.Info("Found local state with non-zero height, skipping state sync")
+		logger.Info("Found local state with non-zero height, skipping state sync", "height", state.LastBlockHeight)
 		stateSync = false
 	}
 
@@ -791,11 +811,18 @@ func NewNode(config *cfg.Config,
 	consensusLogger := logger.With("module", "consensus")
 
 	// RPC recovery is required if blockStore Height is 0
-	if blockStore.Height() == 0 || !stateSync {
+	appHeightAhead := false
+	if ssRestoreHeight > 0 && blockStore.Height() == 0 {
+		// TODO: also must check that apphash height > 0 if bs height == 0, but NewNode is not told anything about app height state
+		appHeightAhead = true // required for local statesync
+		// appHeightAhead = false // required for remote statesync
+	}
+	if appHeightAhead || !stateSync {
 		if err := doHandshake(config.StateSync, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
 			return nil, err
 		}
 
+		// Normal Runtime Restart:
 		// Reload the state. It will have the Version.Consensus.App set by the
 		// Handshake, and may have other modifications as well (ie. depending on
 		// what happened during block replay).
@@ -1005,46 +1032,21 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	// Finish Local stateSync (when AppHeight > 0 but TM Height = 0) by fetching latest heights from RPC
-	if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
-		// if appState.Height > 0, but if blockStore has just been RPC restored, then we must force swtich to consensus
-		n.Logger.Info("Detected recent RPC blockStore restore.  Bootstrap with local state.")
-
-		state, err := n.stateStore.Load()
-		if err != nil {
-			return fmt.Errorf("cannot load state: %w", err)
-		}
-		err = n.stateStore.Bootstrap(state)
-		if err != nil {
-			n.Logger.Error("Failed to bootstrap node with new state", "err", err)
-			return err
-		}
-
-		n.Logger.Info("Fetch remaining heights from network")
-
-		// FIXME Very ugly to have these metrics bleed through here.
-		n.consensusReactor.Metrics.StateSyncing.Set(0)
-		n.consensusReactor.Metrics.FastSyncing.Set(1)
-		bcR, _ := n.bcReactor.(fastSyncReactor)
-		err = bcR.SwitchToFastSync(state)
-		if err != nil {
-			n.Logger.Error("Failed to switch to fast sync", "err", err)
-			return err
-		}
-
-		// statesync no longer necessary
-		n.stateSync = false
-	}
-
 	// Statesync reqeusting all data from P2P
 	if n.stateSync {
+		syncHeight := uint64(0)
+		n.Logger.Info("**** SYNC BUT SKIP REMOTE **", "ssglbh", n.stateSyncGenesis.LastBlockHeight, "bsh", n.blockStore.Height())
+		if n.stateSyncGenesis.LastBlockHeight > 0 && n.blockStore.Height() == 0 {
+			n.Logger.Info("**** SYNC BUT SKIP REMOTE **")
+			syncHeight = uint64(n.stateSyncGenesis.LastBlockHeight)
+		}
 		// If state and blockStore.Height are both at the same height, skip the P2P Statesync and immediately enter consensus
 		bcR, ok := n.bcReactor.(fastSyncReactor)
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
 		}
 		err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
-			n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+			n.config.StateSync, n.config.FastSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis, syncHeight)
 		if err != nil {
 			return fmt.Errorf("failed to start state sync: %w", err)
 		}
